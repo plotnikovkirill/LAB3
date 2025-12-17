@@ -1,2 +1,2 @@
 Выполнили Власов Сергей и Плотников Кирилл 3822Б1ПИмэ1
-<img alt="" src="myplot2.png">
+<img alt="" src="myplot3.png">
