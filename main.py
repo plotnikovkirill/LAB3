@@ -1,115 +1,151 @@
+import matplotlib
+
+try:
+    matplotlib.use('TkAgg')
+except:
+    pass
+
 import numpy as np
 import matplotlib.pyplot as plt
+from matplotlib.widgets import Slider, Button
 
 
-def solve_nand_dynamics_fixed():
-    # ==========================================
-    # 1. Параметры схемы
-    # ==========================================
-    C_zi = 5e-12
-    C_si = 5e-12
-    C_n = 50e-12
 
-    S = 10e-3
-    U_p = 5.0
+def calculate_nand_model(S_val, C_val, U_zi_val):
+    """
+    S_val: Крутизна (А/В)
+    C_val: Емкость нагрузки (Ф) (остальные емкости масштабируем от нее)
+    U_zi_val: Входное напряжение (В)
+    """
+    # Константы
+    U_p = 5.0  # Питание
 
-    # Входные сигналы (Логическая 1 на обоих входах открывает транзисторы)
-    u_zi1 = 5.0
-    u_zi2 = 5.0
+    # Емкости
+    C_n = C_val  # Нагрузка
+    C_zi = C_val / 10.0  # Паразитная емкость затвора
+    C_si = C_val / 10.0  # Паразитная емкость стока
 
     # Временные параметры
-    t_end = 20e-9  # Увеличил до 20 нс, чтобы точно увидеть разряд до конца
+    t_end = 100e-9
     N = 2000
     h = t_end / N
-
     time = np.linspace(0, t_end, N)
-    U_Csi1 = np.zeros(N)
-    U_Csi2 = np.zeros(N)
-    U_Cn = np.zeros(N)
 
-    # ==========================================
-    # 2. Начальные условия
-    # ==========================================
-    # Делим напряжение питания пополам между двумя транзисторами
+    # Массивы
+    U_Csi1 = np.zeros(N)  # Нижний
+    U_Csi2 = np.zeros(N)  # Верхний
+    U_Cn = np.zeros(N)  # Выход
+
+    # Начальные условия
     U_Csi1[0] = U_p / 2
     U_Csi2[0] = U_p / 2
     U_Cn[0] = U_Csi1[0] + U_Csi2[0]
 
-    # ==========================================
-    # 3. Расчет коэффициентов
-    # ==========================================
-    # Знаменатель
+    # Коэффициенты для формул
+    # D - общий знаменатель системы
     D = 3 * C_si + 2 * C_zi + 2 * C_n
 
-    # Коэффициенты для уравнения dU_Csi2 / dt
-    K1 = (S * (C_zi + C_si + C_n)) / (C_si * D)
-    K2 = (S * (C_zi + 2 * C_si + C_n)) / (C_si * D)
-    K3 = S / D
+    # Коэффициенты K
+    K1 = (S_val * (C_zi + C_si + C_n)) / (C_si * D)
+    K2 = (S_val * (C_zi + 2 * C_si + C_n)) / (C_si * D)
+    K3 = S_val / D
+    K_cross = S_val / C_si
 
-    # Коэффициент связи
-    K_cross = S / C_si
-
-    # ==========================================
-    # 4. Основной цикл (Метод Эйлера с отсечкой)
-    # ==========================================
+    # Расчет (Эйлер)
     for n in range(N - 1):
         uc1 = U_Csi1[n]
         uc2 = U_Csi2[n]
 
-        # --- ФИЗИЧЕСКОЕ ИСПРАВЛЕНИЕ ---
-        # Если напряжения уже 0, то дальше они не меняются (разряд окончен)
+        # Если разрядились - стоп
         if uc1 <= 0 and uc2 <= 0:
             U_Csi1[n + 1] = 0
             U_Csi2[n + 1] = 0
             U_Cn[n + 1] = 0
             continue
 
-        # Считаем производные по формулам из текста
-        dU2_dt = (K1 * u_zi1) - (K2 * u_zi2) - K3 * (U_p + uc1 + uc2)
-        dU1_dt = dU2_dt - (K_cross * u_zi1) + (K_cross * u_zi2)
+        # Формулы из задания
+        dU2_dt = (K1 * U_zi_val) - (K2 * U_zi_val) - K3 * (U_p + uc1 + uc2)
+        dU1_dt = dU2_dt - (K_cross * U_zi_val) + (K_cross * U_zi_val)
 
-        # Делаем шаг Эйлера
+        # Шаг интегрирования
         next_uc1 = uc1 + h * dU1_dt
         next_uc2 = uc2 + h * dU2_dt
 
-        # --- ОГРАНИЧЕНИЕ (CLAMPING) ---
-        # Не даем напряжению уйти в минус
-        if next_uc1 < 0: next_uc1 = 0
-        if next_uc2 < 0: next_uc2 = 0
-
-        U_Csi1[n + 1] = next_uc1
-        U_Csi2[n + 1] = next_uc2
-
-        # Выходное напряжение
+        # Ограничение (не уходим в минус)
+        U_Csi1[n + 1] = max(0, next_uc1)
+        U_Csi2[n + 1] = max(0, next_uc2)
         U_Cn[n + 1] = U_Csi1[n + 1] + U_Csi2[n + 1]
 
-    # ==========================================
-    # 5. Визуализация
-    # ==========================================
-    plt.figure(figsize=(10, 6))
-
-    # Выходной сигнал (Красный)
-    plt.plot(time * 1e9, U_Cn, 'r-', linewidth=2, label=r'$U_{C_н}$ (Выход)')
-
-    # Нижний транзистор (Зеленый) - ТОЛСТАЯ линия
-    plt.plot(time * 1e9, U_Csi1, 'g-', linewidth=5, alpha=0.4, label=r'$U_{C_{си1}}$ (Нижний)')
-
-    # Верхний транзистор (Синий) - Тонкий пунктир поверх зеленой
-    plt.plot(time * 1e9, U_Csi2, 'b--', linewidth=1.5, label=r'$U_{C_{си2}}$ (Верхний)')
-
-    plt.title('Лаб 2: Переходный процесс И-НЕ (с учетом отсечки тока)')
-    plt.xlabel('Время (нс)')
-    plt.ylabel('Напряжение (В)')
-    plt.grid(True)
-    plt.legend()
-
-    # Печатаем результаты в консоль
-    print(f"Входы: {u_zi1} В и {u_zi2} В")
-    print(f"Выход Start: {U_Cn[0]:.2f} В")
-    print(f"Выход End:   {U_Cn[-1]:.2f} В")  # Теперь здесь будет 0.00
-
-    plt.show()
+    return time, U_Cn, U_Csi1, U_Csi2
 
 
-if __name__ == "__main__":
-    solve_nand_dynamics_fixed()
+# интерфейс
+
+init_S = 0.3e-3  # 0.3 мА/В
+init_C = 50e-12  # 50 пФ
+init_Ui = 5.0  # 5 В
+
+fig, ax = plt.subplots(figsize=(10, 7))
+plt.subplots_adjust(left=0.1, bottom=0.3)  # Место под слайдеры
+
+# Первый расчет
+t, u_out, u_low, u_high = calculate_nand_model(init_S, init_C, init_Ui)
+
+# графики
+# Красный - выход
+line_out, = ax.plot(t * 1e9, u_out, 'r-', lw=2, label=r'$U_{вых} (Нагрузка)$')
+# Зеленый - нижний транзистор (ТОЛСТЫЙ)
+line_low, = ax.plot(t * 1e9, u_low, 'g-', lw=5, alpha=0.4, label=r'$U_{си1} (Нижний)$')
+# Синий - верхний транзистор (Пунктир внутри зеленого)
+line_high, = ax.plot(t * 1e9, u_high, 'b--', lw=1.5, label=r'$U_{си2} (Верхний)$')
+
+ax.set_title("Лаб 2: Интерактивная модель И-НЕ")
+ax.set_xlabel("Время, нс")
+ax.set_ylabel("Напряжение, В")
+ax.set_ylim(-0.5, 6)
+ax.set_xlim(0, 100)
+ax.grid(True)
+ax.legend()
+
+
+# Слайдеры
+
+axcolor = 'lightgoldenrodyellow'
+
+# Слайдер S (Крутизна)
+ax_S = plt.axes([0.15, 0.20, 0.65, 0.03], facecolor=axcolor)
+s_S = Slider(ax_S, 'Крутизна S [мА/В]', 0.05, 5.0, valinit=init_S * 1000)
+
+# Слайдер C (Емкость)
+ax_C = plt.axes([0.15, 0.15, 0.65, 0.03], facecolor=axcolor)
+s_C = Slider(ax_C, 'Емкость Cн [пФ]', 10, 200, valinit=init_C * 1e12)
+
+# Слайдер U (Вход)
+ax_U = plt.axes([0.15, 0.10, 0.65, 0.03], facecolor=axcolor)
+s_U = Slider(ax_U, 'Вход U_зи [В]', 0.0, 5.0, valinit=init_Ui)
+
+
+
+# update
+
+def update(val):
+    S_new = s_S.val / 1000.0
+    C_new = s_C.val * 1e-12
+    U_new = s_U.val
+
+    # Пересчитываем
+    t_new, u_out_new, u_low_new, u_high_new = calculate_nand_model(S_new, C_new, U_new)
+
+    # Обновляем линии
+    line_out.set_ydata(u_out_new)
+    line_low.set_ydata(u_low_new)
+    line_high.set_ydata(u_high_new)
+
+    fig.canvas.draw_idle()
+
+
+s_S.on_changed(update)
+s_C.on_changed(update)
+s_U.on_changed(update)
+
+plt.show()
